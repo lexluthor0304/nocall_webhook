@@ -58,6 +58,58 @@ async function createRecord(instanceUrl, token, objectName, body) {
   return response.json();
 }
 
+async function updateRecord(instanceUrl, token, objectName, recordId, body) {
+  const response = await fetch(
+    `${instanceUrl}/services/data/${API_VERSION}/sobjects/${objectName}/${recordId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await safeJson(response);
+    throw new Error(
+      `Failed to update ${objectName} (${response.status}): ${JSON.stringify(errorBody)}`
+    );
+  }
+
+  return { id: recordId };
+}
+
+async function queryRecords(instanceUrl, token, soql) {
+  const url = `${instanceUrl}/services/data/${API_VERSION}/query?q=${encodeURIComponent(soql)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody = await safeJson(response);
+    throw new Error(
+      `Salesforce query failed (${response.status}): ${JSON.stringify(errorBody)}`
+    );
+  }
+
+  return response.json();
+}
+
+async function findCallByKey(instanceUrl, token, keyField, keyValue) {
+  if (!keyValue) return null;
+
+  const escapedValue = String(keyValue).replace(/'/g, "\\'");
+  const soql = `SELECT Id FROM NoCall_Call__c WHERE ${keyField} = '${escapedValue}' ORDER BY LastModifiedDate DESC LIMIT 1`;
+  const result = await queryRecords(instanceUrl, token, soql);
+
+  return result?.records?.[0]?.Id || null;
+}
+
 function buildAttributionRecords(callId, attributions = []) {
   return attributions
     .filter((item) => item && (item.label || item.value))
@@ -173,38 +225,66 @@ async function handleRequest(request, env) {
   }
 
   let payload;
+  let operation = 'insert';
+
   try {
     payload = await request.json();
   } catch (error) {
-    return jsonResponse({ error: 'Invalid JSON payload', detail: String(error) }, 400);
+    return jsonResponse({ error: 'Invalid JSON payload', detail: String(error), operation }, 400);
   }
 
   const normalized = normalizePayload(payload);
 
   if (!normalized.call || typeof normalized.call !== 'object') {
-    return jsonResponse({ error: 'Missing call object in payload' }, 400);
+    return jsonResponse({ error: 'Missing call object in payload', operation }, 400);
   }
 
-  const token = await fetchAccessToken(env);
-  const callBody = mapCallPayload(normalized.call);
+  try {
+    const token = await fetchAccessToken(env);
+    const callBody = mapCallPayload(normalized.call);
+    const stableKeyField = 'CallRecord_Id__c';
+    let callId;
 
-  const callResponse = await createRecord(token.instance_url, token.access_token, 'NoCall_Call__c', callBody);
-
-  const callId = callResponse.id;
-  const attributions = buildAttributionRecords(callId, normalized.attributions);
-  let attributionIds = [];
-
-  if (attributions.length > 0) {
-    attributionIds = await Promise.all(
-      attributions.map((record) =>
-        createRecord(token.instance_url, token.access_token, 'NoCall_Attribution__c', record).then(
-          (result) => result.id
-        )
-      )
+    const existingCallId = await findCallByKey(
+      token.instance_url,
+      token.access_token,
+      stableKeyField,
+      callBody[stableKeyField]
     );
-  }
 
-  return jsonResponse({ callId, attributionIds }, 201);
+    if (existingCallId) {
+      await updateRecord(token.instance_url, token.access_token, 'NoCall_Call__c', existingCallId, callBody);
+      callId = existingCallId;
+      operation = 'update';
+    } else {
+      const callResponse = await createRecord(
+        token.instance_url,
+        token.access_token,
+        'NoCall_Call__c',
+        callBody
+      );
+
+      callId = callResponse.id;
+    }
+
+    const attributions = buildAttributionRecords(callId, normalized.attributions);
+    let attributionIds = [];
+
+    if (attributions.length > 0) {
+      attributionIds = await Promise.all(
+        attributions.map((record) =>
+          createRecord(token.instance_url, token.access_token, 'NoCall_Attribution__c', record).then(
+            (result) => result.id
+          )
+        )
+      );
+    }
+
+    const statusCode = operation === 'update' ? 200 : 201;
+    return jsonResponse({ callId, attributionIds, operation }, statusCode);
+  } catch (error) {
+    return jsonResponse({ error: 'Unexpected error', detail: String(error), operation }, 500);
+  }
 }
 
 function jsonResponse(body, status = 200) {
