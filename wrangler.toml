@@ -1,4 +1,4 @@
-name = "nocall-webhook"
+name = "nocallwebhook"
 main = "src/index.js"
 compatibility_date = "2024-04-15"
 
