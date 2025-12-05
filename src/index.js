@@ -69,6 +69,24 @@ function buildAttributionRecords(callId, attributions = []) {
     }));
 }
 
+function mapCallPayload(callPayload) {
+  if (!callPayload || typeof callPayload !== 'object') return callPayload;
+
+  const mapped = { ...callPayload };
+
+  // Convenience mapping: allow a generic `message` field to populate Conversation__c
+  if (callPayload.message && !callPayload.Conversation__c) {
+    mapped.Conversation__c = callPayload.message;
+  }
+
+  // Optional: allow `notes` alias to populate Notes__c for shorter payloads
+  if (callPayload.notes && !callPayload.Notes__c) {
+    mapped.Notes__c = callPayload.notes;
+  }
+
+  return mapped;
+}
+
 async function handleRequest(request, env) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method Not Allowed' }, 405);
@@ -86,12 +104,9 @@ async function handleRequest(request, env) {
   }
 
   const token = await fetchAccessToken(env);
-  const callResponse = await createRecord(
-    token.instance_url,
-    token.access_token,
-    'NoCall_Call__c',
-    payload.call
-  );
+  const callBody = mapCallPayload(payload.call);
+
+  const callResponse = await createRecord(token.instance_url, token.access_token, 'NoCall_Call__c', callBody);
 
   const callId = callResponse.id;
   const attributions = buildAttributionRecords(callId, payload.attributions);
