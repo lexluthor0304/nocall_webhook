@@ -26,7 +26,8 @@ Send a `POST` request with JSON body:
     "Status__c": "Planned",
     "Call_Sid__c": "...",
     "Call_Result__c": "Connected",
-    "Notes__c": "Sample"
+    "message": "conversation transcript (saved to Conversation__c)",
+    "notes": "operator memo (saved to Notes__c)"
   },
   "attributions": [
     { "label": "source", "value": "ads", "externalId": "abc123" }
@@ -36,6 +37,7 @@ Send a `POST` request with JSON body:
 
 - `call` is inserted into `NoCall_Call__c`.
 - Each attribution item creates `NoCall_Attribution__c` with fields mapped to `Label__c`, `Value__c`, and `External_Id__c` and linked to the created call.
+- `message` is automatically copied to `Conversation__c` and `notes` to `Notes__c`; you can also send these API names directly if you prefer.
 
 ## Response
 
