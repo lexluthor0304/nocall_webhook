@@ -84,7 +84,87 @@ function mapCallPayload(callPayload) {
     mapped.Notes__c = callPayload.notes;
   }
 
-  return mapped;
+  return removeUndefined(mapped);
+}
+
+function removeUndefined(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => value !== undefined)
+  );
+}
+
+function formatConversation(messages = []) {
+  if (!Array.isArray(messages)) return messages;
+
+  return messages
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return String(entry);
+
+      const { role, content, name, tool_calls: toolCalls, tool_call_id: toolCallId, args } = entry;
+
+      if (role === 'assistant_tool_call') {
+        return `${role}: ${JSON.stringify({ name, toolCalls, args })}`;
+      }
+
+      if (role === 'tool') {
+        return `${role}(${name || toolCallId || ''}): ${JSON.stringify(content)}`;
+      }
+
+      return `${role || 'message'}: ${typeof content === 'string' ? content : JSON.stringify(content)}`;
+    })
+    .join('\n');
+}
+
+function buildCallFromWebhook(payload) {
+  const conversation = payload.conversation || {};
+  const messages = conversation.message || conversation.messages;
+  const agentLabel =
+    payload.agent && (payload.agent.name || payload.agent.id)
+      ? `${payload.agent.name || ''}${payload.agent.name && payload.agent.id ? ' / ' : ''}${payload.agent.id || ''}`
+      : undefined;
+
+  return removeUndefined({
+    CallRecord_Id__c: payload.id ?? null,
+    Call_Status__c: payload.callStatus ?? null,
+    From_Phone__c: payload.from ?? null,
+    To_Phone__c: payload.to ?? null,
+    Recording_Url__c: payload.detailsUrl ?? null,
+    EndUser_Id__c: payload.endUser?.id ?? null,
+    EndUser_Phone__c: payload.endUser?.phoneNumber ?? null,
+    Dialed_At__c: conversation.startTime ?? null,
+    Ended_At__c: conversation.endTime ?? null,
+    Duration_Sec__c:
+      conversation.duration !== undefined && conversation.duration !== null
+        ? String(conversation.duration)
+        : null,
+    Goal_Status__c: conversation.goalStatus ?? null,
+    Goal_Result__c: conversation.goalResult ?? null,
+    Conversation__c: messages ? formatConversation(messages) : undefined,
+    Triggered_By_Label__c: agentLabel,
+  });
+}
+
+function normalizeAttributions(payload) {
+  if (Array.isArray(payload?.attributions)) return payload.attributions;
+
+  const attrs = payload?.endUser?.attributions;
+  if (attrs && typeof attrs === 'object') {
+    return Object.entries(attrs).map(([label, value]) => ({ label, value }));
+  }
+
+  return [];
+}
+
+function normalizePayload(payload) {
+  if (payload.call && typeof payload.call === 'object') {
+    return { call: payload.call, attributions: payload.attributions };
+  }
+
+  const call = buildCallFromWebhook(payload);
+  const attributions = normalizeAttributions(payload);
+
+  return { call, attributions };
 }
 
 async function handleRequest(request, env) {
@@ -99,17 +179,19 @@ async function handleRequest(request, env) {
     return jsonResponse({ error: 'Invalid JSON payload', detail: String(error) }, 400);
   }
 
-  if (!payload.call || typeof payload.call !== 'object') {
+  const normalized = normalizePayload(payload);
+
+  if (!normalized.call || typeof normalized.call !== 'object') {
     return jsonResponse({ error: 'Missing call object in payload' }, 400);
   }
 
   const token = await fetchAccessToken(env);
-  const callBody = mapCallPayload(payload.call);
+  const callBody = mapCallPayload(normalized.call);
 
   const callResponse = await createRecord(token.instance_url, token.access_token, 'NoCall_Call__c', callBody);
 
   const callId = callResponse.id;
-  const attributions = buildAttributionRecords(callId, payload.attributions);
+  const attributions = buildAttributionRecords(callId, normalized.attributions);
   let attributionIds = [];
 
   if (attributions.length > 0) {
