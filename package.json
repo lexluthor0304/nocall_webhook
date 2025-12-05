@@ -1,0 +1,13 @@
+{
+  "name": "nocall-webhook",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker webhook that inserts NoCall records into Salesforce.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler publish"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.1"
+  }
+}
