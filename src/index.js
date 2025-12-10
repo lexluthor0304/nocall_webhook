@@ -1,6 +1,15 @@
 // Cloudflare Worker to accept webhook payloads and insert NoCall records into Salesforce
 const API_VERSION = 'v58.0';
 
+class SalesforceError extends Error {
+  constructor(message, status, body) {
+    super(message);
+    this.name = 'SalesforceError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function fetchAccessToken(env) {
   const loginUrl = env.SALESFORCE_LOGIN_URL || 'https://login.salesforce.com';
   const params = new URLSearchParams({
@@ -50,8 +59,10 @@ async function createRecord(instanceUrl, token, objectName, body) {
 
   if (!response.ok) {
     const errorBody = await safeJson(response);
-    throw new Error(
-      `Failed to create ${objectName} (${response.status}): ${JSON.stringify(errorBody)}`
+    throw new SalesforceError(
+      `Failed to create ${objectName} (${response.status})`,
+      response.status,
+      errorBody
     );
   }
 
@@ -73,8 +84,10 @@ async function updateRecord(instanceUrl, token, objectName, recordId, body) {
 
   if (!response.ok) {
     const errorBody = await safeJson(response);
-    throw new Error(
-      `Failed to update ${objectName} (${response.status}): ${JSON.stringify(errorBody)}`
+    throw new SalesforceError(
+      `Failed to update ${objectName} (${response.status})`,
+      response.status,
+      errorBody
     );
   }
 
@@ -92,8 +105,10 @@ async function queryRecords(instanceUrl, token, soql) {
 
   if (!response.ok) {
     const errorBody = await safeJson(response);
-    throw new Error(
-      `Salesforce query failed (${response.status}): ${JSON.stringify(errorBody)}`
+    throw new SalesforceError(
+      `Salesforce query failed (${response.status})`,
+      response.status,
+      errorBody
     );
   }
 
@@ -283,8 +298,32 @@ async function handleRequest(request, env) {
     const statusCode = operation === 'update' ? 200 : 201;
     return jsonResponse({ callId, attributionIds, operation }, statusCode);
   } catch (error) {
+    if (isSalesforceError(error)) {
+      const statusCode = mapSalesforceStatus(error.status);
+      const detail = error.body ?? error.message ?? 'Salesforce request failed';
+      return jsonResponse(
+        { error: 'Salesforce error', detail, operation, salesforceStatus: error.status },
+        statusCode
+      );
+    }
+
     return jsonResponse({ error: 'Unexpected error', detail: String(error), operation }, 500);
   }
+}
+
+function isSalesforceError(error) {
+  return (
+    error instanceof SalesforceError ||
+    (error && typeof error === 'object' && 'status' in error && 'body' in error)
+  );
+}
+
+function mapSalesforceStatus(status) {
+  const numeric = Number(status);
+
+  if (Number.isFinite(numeric) && numeric >= 400 && numeric < 600) return numeric;
+  if (Number.isFinite(numeric) && numeric >= 300 && numeric < 400) return 502;
+  return 500;
 }
 
 function jsonResponse(body, status = 200) {
@@ -303,3 +342,5 @@ export default {
     }
   },
 };
+
+export { handleRequest, SalesforceError, isSalesforceError };
