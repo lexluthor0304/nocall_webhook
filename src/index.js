@@ -254,10 +254,12 @@ async function handleRequest(request, env) {
     return jsonResponse({ error: 'Missing call object in payload', operation }, 400);
   }
 
+  let callRecordId;
   try {
     const token = await fetchAccessToken(env);
     const callBody = mapCallPayload(normalized.call);
     const stableKeyField = 'CallRecord_Id__c';
+    callRecordId = callBody[stableKeyField];
     let callId;
 
     const existingCallId = await findCallByKey(
@@ -296,11 +298,22 @@ async function handleRequest(request, env) {
     }
 
     const statusCode = operation === 'update' ? 200 : 201;
+    console.info('Salesforce operation succeeded', {
+      operation,
+      callId,
+      attributionIds,
+    });
     return jsonResponse({ callId, attributionIds, operation }, statusCode);
   } catch (error) {
     if (isSalesforceError(error)) {
       const statusCode = mapSalesforceStatus(error.status);
       const detail = error.body ?? error.message ?? 'Salesforce request failed';
+      console.error('Salesforce operation failed', {
+        operation,
+        callRecordId,
+        salesforceStatus: error.status,
+        salesforceBody: error.body ?? null,
+      });
       return jsonResponse(
         { error: 'Salesforce error', detail, operation, salesforceStatus: error.status },
         statusCode
