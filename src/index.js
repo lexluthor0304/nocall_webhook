@@ -30,7 +30,11 @@ async function fetchAccessToken(env) {
 
   if (!response.ok) {
     const errorBody = await safeJson(response);
-    throw new Error(`Salesforce auth failed (${response.status}): ${JSON.stringify(errorBody)}`);
+    throw new SalesforceError(
+      `Salesforce auth failed (${response.status})`,
+      response.status,
+      errorBody
+    );
   }
 
   return response.json();
@@ -94,6 +98,62 @@ async function updateRecord(instanceUrl, token, objectName, recordId, body) {
   return { id: recordId };
 }
 
+async function deleteRecord(instanceUrl, token, objectName, recordId) {
+  const response = await fetch(
+    `${instanceUrl}/services/data/${API_VERSION}/sobjects/${objectName}/${recordId}`,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await safeJson(response);
+    throw new SalesforceError(
+      `Failed to delete ${objectName} (${response.status})`,
+      response.status,
+      errorBody
+    );
+  }
+
+  return { id: recordId };
+}
+
+async function upsertRecord(instanceUrl, token, objectName, externalIdField, externalId, body) {
+  const response = await fetch(
+    `${instanceUrl}/services/data/${API_VERSION}/sobjects/${objectName}/${externalIdField}/${encodeURIComponent(
+      externalId
+    )}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (response.status === 204) {
+    return { id: externalId };
+  }
+
+  if (!response.ok) {
+    const errorBody = await safeJson(response);
+    throw new SalesforceError(
+      `Failed to upsert ${objectName} (${response.status})`,
+      response.status,
+      errorBody
+    );
+  }
+
+  const json = await response.json();
+  return { id: json.id || externalId };
+}
+
 async function queryRecords(instanceUrl, token, soql) {
   const url = `${instanceUrl}/services/data/${API_VERSION}/query?q=${encodeURIComponent(soql)}`;
   const response = await fetch(url, {
@@ -123,6 +183,21 @@ async function findCallByKey(instanceUrl, token, keyField, keyValue) {
   const result = await queryRecords(instanceUrl, token, soql);
 
   return result?.records?.[0]?.Id || null;
+}
+
+async function deleteAttributionsForCall(instanceUrl, token, callId) {
+  if (!callId) return [];
+
+  const escapedValue = String(callId).replace(/'/g, "\\'");
+  const soql = `SELECT Id FROM NoCall_Attribution__c WHERE NoCall_Call__c = '${escapedValue}' LIMIT 200`;
+  const result = await queryRecords(instanceUrl, token, soql);
+  const ids = result?.records?.map((record) => record.Id).filter(Boolean) || [];
+
+  if (ids.length === 0) return ids;
+
+  await Promise.all(ids.map((id) => deleteRecord(instanceUrl, token, 'NoCall_Attribution__c', id)));
+
+  return ids;
 }
 
 function buildAttributionRecords(callId, attributions = []) {
@@ -288,13 +363,32 @@ async function handleRequest(request, env) {
     let attributionIds = [];
 
     if (attributions.length > 0) {
-      attributionIds = await Promise.all(
-        attributions.map((record) =>
-          createRecord(token.instance_url, token.access_token, 'NoCall_Attribution__c', record).then(
-            (result) => result.id
+      const withExternalId = attributions.filter((record) => record.External_Id__c);
+      const withoutExternalId = attributions.filter((record) => !record.External_Id__c);
+
+      if (withoutExternalId.length > 0) {
+        await deleteAttributionsForCall(token.instance_url, token.access_token, callId);
+        attributionIds = await Promise.all(
+          attributions.map((record) =>
+            createRecord(token.instance_url, token.access_token, 'NoCall_Attribution__c', record).then(
+              (result) => result.id
+            )
           )
-        )
-      );
+        );
+      } else {
+        attributionIds = await Promise.all(
+          withExternalId.map((record) =>
+            upsertRecord(
+              token.instance_url,
+              token.access_token,
+              'NoCall_Attribution__c',
+              'External_Id__c',
+              record.External_Id__c,
+              record
+            ).then((result) => result.id)
+          )
+        );
+      }
     }
 
     const statusCode = operation === 'update' ? 200 : 201;
@@ -320,6 +414,12 @@ async function handleRequest(request, env) {
       );
     }
 
+    console.error('Unexpected error', {
+      operation,
+      callRecordId,
+      error: String(error),
+      stack: error?.stack,
+    });
     return jsonResponse({ error: 'Unexpected error', detail: String(error), operation }, 500);
   }
 }
