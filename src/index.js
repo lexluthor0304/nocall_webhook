@@ -30,7 +30,11 @@ async function fetchAccessToken(env) {
 
   if (!response.ok) {
     const errorBody = await safeJson(response);
-    throw new Error(`Salesforce auth failed (${response.status}): ${JSON.stringify(errorBody)}`);
+    throw new SalesforceError(
+      `Salesforce auth failed (${response.status})`,
+      response.status,
+      errorBody
+    );
   }
 
   return response.json();
@@ -410,6 +414,12 @@ async function handleRequest(request, env) {
       );
     }
 
+    console.error('Unexpected error', {
+      operation,
+      callRecordId,
+      error: String(error),
+      stack: error?.stack,
+    });
     return jsonResponse({ error: 'Unexpected error', detail: String(error), operation }, 500);
   }
 }
