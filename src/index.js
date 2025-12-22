@@ -331,17 +331,30 @@ async function handleRequest(request, env) {
 
   let callRecordId;
   try {
-    const token = await fetchAccessToken(env);
     const callBody = mapCallPayload(normalized.call);
-    const stableKeyField = 'CallRecord_Id__c';
-    callRecordId = callBody[stableKeyField];
+    let stableKeyField = 'To_Phone__c';
+    const fallbackKeyField = 'CallRecord_Id__c';
+
+    let stableKeyValue = callBody[stableKeyField];
+
+    if (!stableKeyValue && callBody[fallbackKeyField]) {
+      stableKeyField = fallbackKeyField;
+      stableKeyValue = callBody[fallbackKeyField];
+    }
+
+    if (!stableKeyValue) {
+      return jsonResponse({ error: 'Missing required "to" field for call matching', operation }, 400);
+    }
+
+    callRecordId = stableKeyValue;
+    const token = await fetchAccessToken(env);
     let callId;
 
     const existingCallId = await findCallByKey(
       token.instance_url,
       token.access_token,
       stableKeyField,
-      callBody[stableKeyField]
+      stableKeyValue
     );
 
     if (existingCallId) {
