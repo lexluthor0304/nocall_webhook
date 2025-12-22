@@ -189,11 +189,64 @@ async function testFallbacksToCallRecordIdWhenToMissing() {
   }
 }
 
+async function testSystemMessagesAreOmittedFromConversation() {
+  const originalFetch = global.fetch;
+  let insertedBody;
+
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/services/oauth2/token')) {
+      return createMockResponse({ access_token: 'token', instance_url: 'https://example.salesforce.com' });
+    }
+
+    if (String(url).includes('/query')) {
+      return createMockResponse({ records: [] });
+    }
+
+    if (String(url).includes('sobjects/NoCall_Call__c/') && options.method === 'POST') {
+      insertedBody = JSON.parse(options.body);
+      return createMockResponse({ id: 'call-xyz' }, 201);
+    }
+
+    throw new Error(`Unexpected fetch call: ${url}`);
+  };
+
+  const payload = {
+    Normalized_Phone__c: '+10000000000',
+    conversation: {
+      messages: [
+        { role: 'system', content: 'system prompt text' },
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'response' },
+      ],
+    },
+  };
+
+  try {
+    const request = new Request('https://example.com', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const response = await handleRequest(request, {});
+    const body = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.equal(body.operation, 'insert');
+    assert.ok(insertedBody.Conversation__c?.includes('user: hello'));
+    assert.ok(insertedBody.Conversation__c?.includes('assistant: response'));
+    assert.ok(!insertedBody.Conversation__c?.includes('system prompt text'));
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
 async function run() {
   await testSalesforceValidationErrorReturnsOriginalStatus();
   await testMatchesByNormalizedPhoneBeforeCallRecordId();
   await testMissingNormalizedPhoneIsRejectedWhenNoFallback();
   await testFallbacksToCallRecordIdWhenToMissing();
+  await testSystemMessagesAreOmittedFromConversation();
   console.log('All tests passed');
 }
 

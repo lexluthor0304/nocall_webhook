@@ -244,6 +244,7 @@ function formatConversation(messages = []) {
   if (!Array.isArray(messages)) return messages;
 
   return messages
+    .filter((entry) => entry?.role !== 'system')
     .map((entry) => {
       if (!entry || typeof entry !== 'object') return String(entry);
 
