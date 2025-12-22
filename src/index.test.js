@@ -31,7 +31,13 @@ async function testSalesforceValidationErrorReturnsOriginalStatus() {
     throw new Error(`Unexpected fetch call: ${url}`);
   };
 
-  const payload = { id: 'call-1', callStatus: 'ended', from: '+10000000000', to: '+19999999999' };
+  const payload = {
+    id: 'call-1',
+    callStatus: 'ended',
+    from: '+10000000000',
+    to: '+19999999999',
+    Normalized_Phone__c: '+19999999999',
+  };
   const request = new Request('https://example.com', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -55,7 +61,7 @@ async function testSalesforceValidationErrorReturnsOriginalStatus() {
   }
 }
 
-async function testMatchesByToPhoneBeforeCallRecordId() {
+async function testMatchesByNormalizedPhoneBeforeCallRecordId() {
   const originalFetch = global.fetch;
   const mockCalls = [];
   let insertedBody;
@@ -89,7 +95,13 @@ async function testMatchesByToPhoneBeforeCallRecordId() {
     throw new Error(`Unexpected fetch call: ${url}`);
   };
 
-  const payload = { id: 'call-1', callStatus: 'ended', from: '+10000000000', to: '+19999999999' };
+  const payload = {
+    id: 'call-1',
+    callStatus: 'ended',
+    from: '+10000000000',
+    to: '+19999999999',
+    Normalized_Phone__c: '+19999999999',
+  };
   const request1 = new Request('https://example.com', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -107,24 +119,24 @@ async function testMatchesByToPhoneBeforeCallRecordId() {
 
     assert.equal(response1.status, 201, 'First payload should create a record');
     assert.equal(body1.operation, 'insert');
-    assert.equal(insertedBody.To_Phone__c, payload.to);
+    assert.equal(insertedBody.Normalized_Phone__c, payload.Normalized_Phone__c);
 
     const response2 = await handleRequest(request2, {});
     const body2 = await response2.json();
 
-    assert.equal(response2.status, 200, 'Second payload with same to should update existing record');
+    assert.equal(response2.status, 200, 'Second payload with same normalized phone should update existing record');
     assert.equal(body2.operation, 'update');
     assert.equal(updatedBody.Call_Status__c, 'completed');
     assert.ok(
-      mockCalls.some(({ url }) => String(url).includes(`To_Phone__c`)),
-      'Query should search by To_Phone__c'
+      mockCalls.some(({ url }) => String(url).includes(`Normalized_Phone__c`)),
+      'Query should search by Normalized_Phone__c'
     );
   } finally {
     global.fetch = originalFetch;
   }
 }
 
-async function testMissingToIsRejectedWhenNoFallback() {
+async function testMissingNormalizedPhoneIsRejectedWhenNoFallback() {
   const request = new Request('https://example.com', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -135,7 +147,7 @@ async function testMissingToIsRejectedWhenNoFallback() {
   const body = await response.json();
 
   assert.equal(response.status, 400);
-  assert.equal(body.error, 'Missing required "to" field for call matching');
+  assert.equal(body.error, 'Missing required normalized phone for call matching');
 }
 
 async function testFallbacksToCallRecordIdWhenToMissing() {
@@ -179,8 +191,8 @@ async function testFallbacksToCallRecordIdWhenToMissing() {
 
 async function run() {
   await testSalesforceValidationErrorReturnsOriginalStatus();
-  await testMatchesByToPhoneBeforeCallRecordId();
-  await testMissingToIsRejectedWhenNoFallback();
+  await testMatchesByNormalizedPhoneBeforeCallRecordId();
+  await testMissingNormalizedPhoneIsRejectedWhenNoFallback();
   await testFallbacksToCallRecordIdWhenToMissing();
   console.log('All tests passed');
 }

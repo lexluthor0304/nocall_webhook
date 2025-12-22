@@ -216,6 +216,10 @@ function mapCallPayload(callPayload) {
 
   const mapped = { ...callPayload };
 
+  if (!mapped.Normalized_Phone__c && mapped.To_Phone__c) {
+    mapped.Normalized_Phone__c = mapped.To_Phone__c;
+  }
+
   // Convenience mapping: allow a generic `message` field to populate Conversation__c
   if (callPayload.message && !callPayload.Conversation__c) {
     mapped.Conversation__c = callPayload.message;
@@ -271,6 +275,7 @@ function buildCallFromWebhook(payload) {
     Call_Status__c: payload.callStatus ?? null,
     From_Phone__c: payload.from ?? null,
     To_Phone__c: payload.to ?? null,
+    Normalized_Phone__c: payload.Normalized_Phone__c ?? null,
     Recording_Url__c: payload.detailsUrl ?? null,
     EndUser_Id__c: payload.endUser?.id ?? null,
     EndUser_Phone__c: payload.endUser?.phoneNumber ?? null,
@@ -315,7 +320,7 @@ async function handleRequest(request, env) {
   }
 
   let payload;
-  let operation = 'insert';
+  let operation = 'upsert';
 
   try {
     payload = await request.json();
@@ -332,7 +337,7 @@ async function handleRequest(request, env) {
   let callRecordId;
   try {
     const callBody = mapCallPayload(normalized.call);
-    let stableKeyField = 'To_Phone__c';
+    let stableKeyField = 'Normalized_Phone__c';
     const fallbackKeyField = 'CallRecord_Id__c';
 
     let stableKeyValue = callBody[stableKeyField];
@@ -343,7 +348,7 @@ async function handleRequest(request, env) {
     }
 
     if (!stableKeyValue) {
-      return jsonResponse({ error: 'Missing required "to" field for call matching', operation }, 400);
+      return jsonResponse({ error: 'Missing required normalized phone for call matching', operation }, 400);
     }
 
     callRecordId = stableKeyValue;
@@ -370,6 +375,7 @@ async function handleRequest(request, env) {
       );
 
       callId = callResponse.id;
+      operation = 'insert';
     }
 
     const attributions = buildAttributionRecords(callId, normalized.attributions);
