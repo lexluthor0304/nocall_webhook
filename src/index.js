@@ -216,6 +216,10 @@ function mapCallPayload(callPayload) {
 
   const mapped = { ...callPayload };
 
+  if (!mapped.Normalized_Phone__c && mapped.To_Phone__c) {
+    mapped.Normalized_Phone__c = mapped.To_Phone__c;
+  }
+
   // Convenience mapping: allow a generic `message` field to populate Conversation__c
   if (callPayload.message && !callPayload.Conversation__c) {
     mapped.Conversation__c = callPayload.message;
@@ -240,6 +244,7 @@ function formatConversation(messages = []) {
   if (!Array.isArray(messages)) return messages;
 
   return messages
+    .filter((entry) => entry?.role !== 'system')
     .map((entry) => {
       if (!entry || typeof entry !== 'object') return String(entry);
 
@@ -271,6 +276,7 @@ function buildCallFromWebhook(payload) {
     Call_Status__c: payload.callStatus ?? null,
     From_Phone__c: payload.from ?? null,
     To_Phone__c: payload.to ?? null,
+    Normalized_Phone__c: payload.Normalized_Phone__c ?? null,
     Recording_Url__c: payload.detailsUrl ?? null,
     EndUser_Id__c: payload.endUser?.id ?? null,
     EndUser_Phone__c: payload.endUser?.phoneNumber ?? null,
@@ -315,7 +321,7 @@ async function handleRequest(request, env) {
   }
 
   let payload;
-  let operation = 'insert';
+  let operation = 'upsert';
 
   try {
     payload = await request.json();
@@ -331,17 +337,30 @@ async function handleRequest(request, env) {
 
   let callRecordId;
   try {
-    const token = await fetchAccessToken(env);
     const callBody = mapCallPayload(normalized.call);
-    const stableKeyField = 'CallRecord_Id__c';
-    callRecordId = callBody[stableKeyField];
+    let stableKeyField = 'Normalized_Phone__c';
+    const fallbackKeyField = 'CallRecord_Id__c';
+
+    let stableKeyValue = callBody[stableKeyField];
+
+    if (!stableKeyValue && callBody[fallbackKeyField]) {
+      stableKeyField = fallbackKeyField;
+      stableKeyValue = callBody[fallbackKeyField];
+    }
+
+    if (!stableKeyValue) {
+      return jsonResponse({ error: 'Missing required normalized phone for call matching', operation }, 400);
+    }
+
+    callRecordId = stableKeyValue;
+    const token = await fetchAccessToken(env);
     let callId;
 
     const existingCallId = await findCallByKey(
       token.instance_url,
       token.access_token,
       stableKeyField,
-      callBody[stableKeyField]
+      stableKeyValue
     );
 
     if (existingCallId) {
@@ -357,6 +376,7 @@ async function handleRequest(request, env) {
       );
 
       callId = callResponse.id;
+      operation = 'insert';
     }
 
     const attributions = buildAttributionRecords(callId, normalized.attributions);
